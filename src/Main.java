@@ -148,14 +148,37 @@ public class Main {
         Thread.sleep(3000);
 
         // Create and start threads
-        Thread userInputThread = createInputThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running);
-        Thread turbulenceThread = createTurbulenceThread(rollControl, pitchControl, yawControl, turbulenceEnabled, running);
+        Thread userInputThread = createInputThread(
+                rollControl, pitchControl, yawControl, turbulenceEnabled, running
+        );
 
         // Load maneuver script
         String scriptPath = params.getOrDefault("script", "default_maneuvers.csv");
         ManeuverScript script = ManeuverScript.load(scriptPath);
 
-        Thread automatedDemoThread = createAutomatedDemoThread(rollControl, pitchControl, yawControl, script);
+        Thread turbulenceThread = new Thread(
+                new SupervisedRunner(
+                        "turbulence",
+                        createTurbulenceWorker(
+                                rollControl, pitchControl, yawControl,
+                                turbulenceEnabled, running
+                        ),
+                        running::get
+                ),
+                "Supervisor-turbulence"
+        );
+
+        Thread automatedDemoThread = new Thread(
+                new SupervisedRunner(
+                        "automated-demo",
+                        createAutomatedDemoWorker(
+                                rollControl, pitchControl, yawControl,
+                                script, running
+                        ),
+                        running::get
+                ),
+                "Supervisor-automated-demo"
+        );
 
         userInputThread.start();
         turbulenceThread.start();
@@ -299,60 +322,65 @@ public class Main {
         });
     }
     
-    /**
-     * Creates a thread that applies turbulence to the aircraft
-     */
-    private static Thread createTurbulenceThread(DirectionControl roll, DirectionControl pitch, DirectionControl yaw,
-                                         AtomicBoolean turbulenceEnabled, AtomicBoolean running) {
-        return new Thread(() -> {
-            Random random = new Random();
 
-            while (running.get()) {
+    /** Creates one supervised turbulence work cycle  */
+    private static Runnable createTurbulenceWorker(DirectionControl roll, DirectionControl pitch,DirectionControl yaw,AtomicBoolean turbulenceEnabled,AtomicBoolean running) {Random random = new Random();
+        
+        return () -> {
+        if (!running.get()) return;
+
+   
+        
+        
+        if (turbulenceEnabled.get()) {
+            double rollJitter = (random.nextDouble() - 0.5) * 2.0;
+            double pitchJitter = (random.nextDouble() - 0.5) * 1.5;
+            double yawJitter = (random.nextDouble() - 0.5) * 1.0;
+    
+            roll.setCurrentValue(roll.getCurrentValue() + rollJitter);
+            pitch.setCurrentValue(pitch.getCurrentValue() + pitchJitter);
+            yaw.setCurrentValue(yaw.getCurrentValue() + yawJitter);
+            }
+    
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            };
+            
+        
+        };
+        
+
+        /** Creates one supervised automated-demo work cycle.*/
+        private static Runnable createAutomatedDemoWorker(DirectionControl roll,DirectionControl pitch,DirectionControl yaw,ManeuverScript script,AtomicBoolean running) { AtomicBoolean started = new AtomicBoolean(false);
+
+            return () -> {
+            if (!running.get()) return;
+
+            if (started.compareAndSet(false, true)) {
                 try {
-                    // Only apply turbulence if enabled
-                    if (turbulenceEnabled.get()) {
-                        // Create random jitter values to simulate turbulence
-                        double rollJitter = (random.nextDouble() - 0.5) * 2.0;
-                        double pitchJitter = (random.nextDouble() - 0.5) * 1.5;
-                        double yawJitter = (random.nextDouble() - 0.5) * 1.0;
-
-                        // Apply jitter
-                        roll.setCurrentValue(roll.getCurrentValue() + rollJitter);
-                        pitch.setCurrentValue(pitch.getCurrentValue() + pitchJitter);
-                        yaw.setCurrentValue(yaw.getCurrentValue() + yawJitter);
-                    }
-
-                    Thread.sleep(200);
+                    Thread.sleep(3000);
+                    System.out.println("\nStarting automated flight demonstration with ultra-gentle maneuvers...");
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    break;
+                    return;
                 }
             }
-        });
-    }
 
-    /**
-     * Creates a thread that automatically demonstrates various flight maneuvers
-     * without requiring user input - using ultra-gentle transitions
-     */
-    private static Thread createAutomatedDemoThread(DirectionControl roll, DirectionControl pitch,
-                                                 DirectionControl yaw, ManeuverScript script) {
-    return new Thread(() -> {
-        try {
-            Thread.sleep(3000);
-            System.out.println("\nStarting automated flight demonstration with ultra-gentle maneuvers...");
+            ManeuverScript.Maneuver m = script.next();
 
-            while (true) {
-                ManeuverScript.Maneuver m = script.next();
-                roll.setTargetValue(m.roll);
-                pitch.setTargetValue(m.pitch);
-                yaw.setTargetValue(m.yaw);
+            roll.setTargetValue(m.roll);
+            pitch.setTargetValue(m.pitch);
+            yaw.setTargetValue(m.yaw);
+
+            try {
                 Thread.sleep(m.seconds * 1000L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (InterruptedException e) {
-            System.out.println("Demo thread interrupted.");
-        }
-    });
-}
+        };
+    }
     
 }
