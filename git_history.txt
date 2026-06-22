@@ -1,0 +1,16 @@
+bee02c32e4279c22d0122f5b648f956e41970025 Merge pull request #2 from LizweM/task2-observer-pattern
+eb2a1cb78f51fa52bc2ec8cb928a1d1d3dd38771 Task 2: complete - observer pattern replacing polling in AircraftGUI
+91d7c41729bde24f827878f4053e49a0ae4ed745 Prompt disclaimer for task 3
+b3b173787829a013c4a373a554bbb4a04c6bbeef self-healing supervised worker threads
+579bca7c77c1f5aa646121b5c373c49b95da5feb Merge pull request #1 from LizweM/task1-maneuver-script
+ad7372d0f16212c2dfb00b89ab98c483189c8672 Fix corrupted .gitignore file
+06ae162b2fe4be347be6cbe8763226582ab8b5e0 Remove class files from tracking
+30d2f778135484947dc7a5a077c116c8c7b32fad Task 1: complete - CSV script loading, validation, and CLI flag working
+c8506989be3604e8e819b64d177e6427ccbba6dc Fix .gitignore to exclude class files and IDE folders
+453cac677c84de2d4b3028f48c7dfdbfd5fc03a2 Remove ManeuverScript class files from tracking
+7a0e4ffc41505ee537fa9a79e548daf9febf15f0 Task 1: add ManeuverScript class with CSV loading and validation
+0d9956cf35b1c4ed26a58d447cf14fd7315f3c82 Remove compiled .class files from tracking
+7bb01650a51906e56b6faef244497b25612e6b8d Add starter codebase with src folder structure - confirmed working baseline
+cda3487ea2aa0be6b14994a7fb82e380dc818af5 Add project_2561_final as a normal folder (removed embedded repo)
+d87c83710dd322ec96d8571d802f35ebacebcba7 Ignore project_2561_final directory
+1ee9d9aa29384877fe7015e635298e983d4c415d Force remove embedded git repository project_2561_final from main repo
