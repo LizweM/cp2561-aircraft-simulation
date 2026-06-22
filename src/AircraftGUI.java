@@ -5,15 +5,13 @@
  * Aircraft Simulation Project
  */
 
-import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.text.DecimalFormat;
-import java.util.ArrayList;
 import java.util.Random;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
-import javax.swing.Timer;
+import javax.swing.*;
 
 /**
  * Professional aircraft simulation controller with multithreaded architecture.
@@ -88,24 +86,29 @@ public class AircraftGUI {
     private final Object obstacleLock = new Object();
     
     // Thread performance monitoring
-    private long[] threadExecutionTimes = new long[5]; // [environment, aircraft, obstacles, rendering, overall]
+    private long[] threadExecutionTimes = new long[5];
     private long[] threadExecutionCounts = new long[5];
     private long monitoringStartTime;
     private final String[] threadNames = {"Environment", "Aircraft", "Obstacles", "Rendering", "Overall"};
-    private boolean showPerformanceOverlay = true; // Start with overlay visible
+    private boolean showPerformanceOverlay = true;
     private long lastFrameTime = 0;
-    private double avgFrameTime = 16.67; // Target 60 FPS (16.67ms)
+    private double avgFrameTime = 16.67;
     private final DecimalFormat df = new DecimalFormat("#0.00");
     
     // Direction controls that drive aircraft orientation.
-    // The GUI reads from these every frame instead of generating its own roll/pitch/yaw,
-    // so the displayed attitude matches the simulation in Main.
     private final DirectionControl rollControl;
     private final DirectionControl pitchControl;
     private final DirectionControl yawControl;
 
-    // Optional resource monitor - if set, GUI throttles its frame rate based on
-    // the latest OS CPU / memory measurements published by the monitor thread.
+    // Latest values published by observers - volatile for safe cross-thread visibility.
+    // The simulation thread writes these via the listener callbacks;
+    // the EDT reads them in updateAircraft(). Volatile guarantees the EDT
+    // always sees the most recent value without needing a lock.
+    private volatile double latestRoll = 0.0;
+    private volatile double latestPitch = 0.0;
+    private volatile double latestYaw = 0.0;
+
+    // Optional resource monitor
     private ResourceMonitor resourceMonitor;
 
     // Aircraft state variables
@@ -120,11 +123,11 @@ public class AircraftGUI {
     private long simulationStartTime = System.currentTimeMillis();
     private double turbulenceFactor = 0.0;
     private boolean isClimbingDecision = false;
-    private String currentDecision = "LEVEL FLIGHT"; // Current decision text
+    private String currentDecision = "LEVEL FLIGHT";
     private boolean thunderstormAhead = false;
     
     // Environment variables
-    private double timeOfDay = 0.5; // 0=dawn, 0.5=noon, 1.0=dusk, 1.5=midnight
+    private double timeOfDay = 0.5;
     private int dayNightCycleCounter = 0;
     private boolean isDayTime = true;
     
@@ -141,7 +144,8 @@ public class AircraftGUI {
 
     /**
      * Creates the GUI bound to the simulation's three orientation controls.
-     * Roll/pitch/yaw shown on screen are read from these instances each frame.
+     * Registers observers on all three axes so the GUI reacts to changes
+     * instead of polling getCurrentValue() every frame.
      */
     public AircraftGUI(DirectionControl rollControl,
                        DirectionControl pitchControl,
@@ -149,6 +153,16 @@ public class AircraftGUI {
         this.rollControl = rollControl;
         this.pitchControl = pitchControl;
         this.yawControl = yawControl;
+
+        /*
+         * Thread-safety note: DirectionControl.update() runs on the simulation
+         * thread. The listener writes to a volatile double, which guarantees
+         * the EDT will see the latest value when the Swing timer fires.
+         * We never call any Swing method from inside the listener.
+         */
+        rollControl.addListener(c -> latestRoll = c.getCurrentValue());
+        pitchControl.addListener(c -> latestPitch = c.getCurrentValue());
+        yawControl.addListener(c -> latestYaw = c.getCurrentValue());
     }
 
     public void setResourceMonitor(ResourceMonitor monitor) {
@@ -157,18 +171,16 @@ public class AircraftGUI {
 
     /**
      * Adjusts the render-timer cadence in response to the host's CPU pressure.
-     * Called from the ResourceMonitor thread; we marshal the timer change onto
-     * the EDT.
      */
     public void setPerformanceLevel(ResourceMonitor.PerformanceLevel level) {
         SwingUtilities.invokeLater(() -> {
             if (timer == null) return;
             int newDelay;
             switch (level) {
-                case MINIMAL: newDelay = 66; break; // ~15 FPS
-                case REDUCED: newDelay = 33; break; // ~30 FPS
+                case MINIMAL: newDelay = 66; break;
+                case REDUCED: newDelay = 33; break;
                 case NORMAL:
-                default:      newDelay = 16; break; // ~60 FPS
+                default:      newDelay = 16; break;
             }
             if (timer.getDelay() != newDelay) {
                 timer.setDelay(newDelay);
@@ -177,7 +189,6 @@ public class AircraftGUI {
         });
     }
 
-    // Method that Main.java calls to display the GUI
     public void show() {
         SwingUtilities.invokeLater(() -> {
             createAndShowGUI();
@@ -186,7 +197,6 @@ public class AircraftGUI {
         });
     }
     
-    // Start multithreaded simulation with performance monitoring
     private void startMultithreadedSimulation() {
         monitoringStartTime = System.currentTimeMillis();
         running = true;
@@ -194,7 +204,6 @@ public class AircraftGUI {
         System.out.println("Starting multithreaded simulation with performance monitoring");
         System.out.println("Toggle performance overlay with 'P' key");
         
-        // Thread for updating the environment (clouds, terrain, day/night cycle)
         scheduler.scheduleAtFixedRate(() -> {
             if (!running) return;
             long startTime = System.nanoTime();
@@ -209,14 +218,9 @@ public class AircraftGUI {
                 long duration = System.nanoTime() - startTime;
                 threadExecutionTimes[0] += duration;
                 threadExecutionCounts[0]++;
-                long durationMs = duration / 1_000_000;
-                if (durationMs > 20) {
-                    System.out.println("Environment update took " + durationMs + "ms");
-                }
             }
         }, 0, 50, TimeUnit.MILLISECONDS);
         
-        // Thread for updating aircraft physics
         scheduler.scheduleAtFixedRate(() -> {
             if (!running) return;
             long startTime = System.nanoTime();
@@ -231,14 +235,9 @@ public class AircraftGUI {
                 long duration = System.nanoTime() - startTime;
                 threadExecutionTimes[1] += duration;
                 threadExecutionCounts[1]++;
-                long durationMs = duration / 1_000_000;
-                if (durationMs > 16) {
-                    System.out.println("Aircraft physics update took " + durationMs + "ms");
-                }
             }
         }, 0, 33, TimeUnit.MILLISECONDS);
         
-        // Thread for obstacle processing and turbulence
         scheduler.scheduleAtFixedRate(() -> {
             if (!running) return;
             long startTime = System.nanoTime();
@@ -254,29 +253,19 @@ public class AircraftGUI {
                 long duration = System.nanoTime() - startTime;
                 threadExecutionTimes[2] += duration;
                 threadExecutionCounts[2]++;
-                long durationMs = duration / 1_000_000;
-                if (durationMs > 30) {
-                    System.out.println("Obstacle/turbulence update took " + durationMs + "ms");
-                }
             }
         }, 0, 100, TimeUnit.MILLISECONDS);
         
-        // Timer for display updates - runs at 60fps for smooth rendering
         lastFrameTime = System.currentTimeMillis();
         
-        // Use Swing Timer for GUI updates at 60 FPS
         timer = new Timer(16, e -> {
-            // Measure frame time for performance monitoring
             long startTime = System.nanoTime();
             long now = System.currentTimeMillis();
             long frameTime = now - lastFrameTime;
             lastFrameTime = now;
             
-            // Track moving average of frame time (exponential moving average)
             avgFrameTime = (avgFrameTime * 0.95) + (frameTime * 0.05);
 
-            // Log live OS resource snapshot roughly once per second so the
-            // throttling decisions made by ResourceMonitor are visible.
             if (resourceMonitor != null && dayNightCycleCounter % 60 == 0) {
                 double cpu = resourceMonitor.getSystemCpuLoad();
                 double proc = resourceMonitor.getProcessCpuLoad();
@@ -287,7 +276,6 @@ public class AircraftGUI {
                         timer != null ? 1000 / Math.max(1, timer.getDelay()) : 0);
             }
 
-            // Process day/night cycle
             dayNightCycleCounter++;
             if (dayNightCycleCounter > 300) {
                 dayNightCycleCounter = 0;
@@ -296,11 +284,8 @@ public class AircraftGUI {
                 isDayTime = timeOfDay < 1.0 || timeOfDay > 1.8;
             }
             
-            // Update panel with our current state
             if (panel != null) {
-                // These calls update the AircraftPanel's state for rendering
                 synchronized (aircraftLock) {
-                    // Update individual aircraft parameters
                     panel.setRoll(roll);
                     panel.setPitch(pitch);
                     panel.setYaw(yaw);
@@ -309,20 +294,17 @@ public class AircraftGUI {
                     panel.setTurbulenceFactor(turbulenceFactor);
                 }
                 
-                // Update day/night cycle information
                 synchronized (environmentLock) {
                     panel.setTimeOfDay(timeOfDay);
                     panel.setIsDayTime(isDayTime);
                 }
                 
-                // Update turbulence and weather information
                 synchronized (obstacleLock) {
                     panel.setThunderstormAhead(thunderstormAhead);
                     panel.setTurbulenceFactor(turbulenceFactor);
                     panel.setCurrentDecision(currentDecision);
                 }
                 
-                // Set performance information for overlay
                 panel.setThreadExecutionTimes(threadExecutionTimes);
                 panel.setThreadExecutionCounts(threadExecutionCounts);
                 panel.setThreadNames(threadNames);
@@ -330,20 +312,16 @@ public class AircraftGUI {
                 panel.setAvgFrameTime(avgFrameTime);
                 panel.setMonitoringStartTime(monitoringStartTime);
                 
-                // Repaint the panel
                 panel.repaint();
             }
             
-            // Update thread execution timing
             long duration = System.nanoTime() - startTime;
             threadExecutionTimes[3] += duration;
             threadExecutionCounts[3]++;
         });
         
-        // Start the timer
         timer.start();
         
-        // Schedule status update after 5 seconds
         scheduler.schedule(() -> {
             System.out.println("Multithreaded simulation running with " + threadNames.length + " threads");
             for (int i = 0; i < threadNames.length; i++) {
@@ -355,53 +333,42 @@ public class AircraftGUI {
         }, 5, TimeUnit.SECONDS);
     }
     
-    // Update environment
     private void updateEnvironment() {
-        // This now primarily updates time of day, which is passed to AircraftPanel
-        // The panel handles the actual rendering
     }
     
     /**
-     * Pulls roll/pitch/yaw from the simulation's DirectionControl instances and
-     * updates GUI-specific dynamics (altitude tracking and airspeed variation).
+     * Reads roll/pitch/yaw from the volatile fields updated by observers
+     * instead of polling DirectionControl directly.
      */
     private void updateAircraft() {
         long currentTime = System.currentTimeMillis();
         double timeSeconds = (currentTime - simulationStartTime) / 1000.0;
 
-        // Read orientation from the simulation's control instances.
-        roll = rollControl.getCurrentValue();
-        pitch = pitchControl.getCurrentValue();
-        yaw = yawControl.getCurrentValue();
+        // Read from volatile fields updated by observers instead of polling
+        roll = latestRoll;
+        pitch = latestPitch;
+        yaw = latestYaw;
 
-        // Altitude tracking: move toward targetAltitude at up to 500 ft/min.
         double altitudeDifference = targetAltitude - currentAltitude;
         double climbRate = Math.min(Math.max(altitudeDifference / 10.0, -500), 500);
         currentAltitude += climbRate / 60.0;
-        currentAltitude += (random.nextDouble() - 0.5) * 5.0; // air-pocket jitter
+        currentAltitude += (random.nextDouble() - 0.5) * 5.0;
 
-        // Airspeed variation around cruise.
         double baseSpeed = 250.0;
         double speedVariation = Math.sin(timeSeconds * 0.1) * 15.0;
         flightSpeed = baseSpeed + speedVariation + (random.nextDouble() - 0.5) * 5.0;
         flightSpeed = Math.max(180, Math.min(320, flightSpeed));
     }
     
-    // Process obstacles to determine if we need to climb
     private void processObstacles() {
-        // Simplified obstacle processing - now most is in AircraftPanel
-        thunderstormAhead = random.nextInt(100) < 5; // 5% chance of thunderstorm
+        thunderstormAhead = random.nextInt(100) < 5;
         
-        // Make decisions based on obstacles
         if (thunderstormAhead) {
-            targetAltitude = 30000; // Climb to avoid thunderstorm
+            targetAltitude = 30000;
             
-            // Update decision text
             int direction = targetAltitude > currentAltitude ? 1 : -1;
             if (Math.abs(targetAltitude - currentAltitude) > 200) {
                 isClimbingDecision = true;
-                
-                // Update decision text
                 if (direction > 0) {
                     currentDecision = "CLIMBING";
                 } else {
@@ -412,44 +379,32 @@ public class AircraftGUI {
                 isClimbingDecision = false;
             }
         } else {
-            // No obstacles, return to cruising altitude
             targetAltitude = 11000;
             currentDecision = "LEVEL FLIGHT";
             isClimbingDecision = false;
         }
     }
     
-    // Update turbulence based on proximity to clouds and thunderstorms
     private void updateTurbulence() {
-        // Generate realistic turbulence that varies over time
         if (thunderstormAhead) {
-            // Severe turbulence near thunderstorms
             turbulenceFactor = 10.0 + random.nextDouble() * 15.0;
-            
-            // Update decision text for severe turbulence
             synchronized (aircraftLock) {
                 if (thunderstormAhead && Math.abs(turbulenceFactor) > 10) {
                     currentDecision = "TURBULENCE!";
                 }
             }
         } else {
-            // Light to moderate turbulence normally
             turbulenceFactor = Math.max(0, turbulenceFactor * 0.95 - 0.5);
-            if (random.nextInt(100) < 5) { // Occasional random turbulence
+            if (random.nextInt(100) < 5) {
                 turbulenceFactor = random.nextDouble() * 7.0;
             }
         }
     }
     
-    // Performance overlay is now handled by AircraftPanel.drawEnhancedPerformanceOverlay()
-    // This method was removed to prevent duplicate overlays
-    
-    // Method to create and display the GUI
     private void createAndShowGUI() {
         frame = new JFrame("Aircraft Simulation with Performance Monitoring");
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         
-        // Add key listener to toggle performance overlay with 'P' key
         KeyListener keyListener = new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
@@ -461,27 +416,20 @@ public class AircraftGUI {
             }
         };
         
-        // Initialize our AircraftPanel
         panel = new AircraftPanel();
         panel.setPreferredSize(new Dimension(PANEL_WIDTH, PANEL_HEIGHT));
-        
-        // Make sure panel can receive key events
         panel.setFocusable(true);
         panel.addKeyListener(keyListener);
         
         frame.add(panel);
         frame.pack();
-        frame.setLocationRelativeTo(null); // Center on screen
+        frame.setLocationRelativeTo(null);
         frame.setVisible(true);
         
-        // Request focus for key events
         panel.requestFocusInWindow();
-        
-        // Also add key listener to frame for redundancy
         frame.addKeyListener(keyListener);
     }
     
-    // Shutdown method to clean up threads and log performance statistics
     public void shutdown() {
         running = false;
         System.out.println("Shutting down aircraft simulation...");
@@ -490,12 +438,10 @@ public class AircraftGUI {
             timer.stop();
         }
         
-        // Shutdown thread pools
         scheduler.shutdown();
         executor.shutdown();
         
         try {
-            // Wait for tasks to complete
             if (!scheduler.awaitTermination(2, TimeUnit.SECONDS)) {
                 scheduler.shutdownNow();
             }
@@ -508,7 +454,6 @@ public class AircraftGUI {
             Thread.currentThread().interrupt();
         }
         
-        // Print performance statistics
         System.out.println("\n==== THREAD PERFORMANCE STATISTICS ====");
         System.out.println("Total simulation time: " + 
                           ((System.currentTimeMillis() - monitoringStartTime) / 1000.0) + " seconds");
@@ -527,11 +472,9 @@ public class AircraftGUI {
         System.out.println("====================================\n");
     }
     
-    // Static method to create and return a GUI update thread
     public static Thread createGUIUpdateThread(AircraftGUI gui, AtomicBoolean running) {
         return new Thread(() -> {
             try {
-                // Keep running until signaled to stop
                 while (running.get()) {
                     Thread.sleep(100);
                 }
@@ -543,20 +486,12 @@ public class AircraftGUI {
         }, "GUI-Update");
     }
     
-    // Quit action to be called when user wants to exit
     private Runnable quitAction;
     
-    /**
-     * Set action to execute when user quits the simulation
-     * @param action The action to run when quit is requested
-     */
     public void setQuitAction(Runnable action) {
         this.quitAction = action;
     }
     
-    /**
-     * Execute the quit action if defined
-     */
     public void executeQuitAction() {
         if (quitAction != null) {
             quitAction.run();

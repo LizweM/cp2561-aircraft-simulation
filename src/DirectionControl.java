@@ -31,6 +31,10 @@ public class DirectionControl {
     private int sampleCount = 0;
     private boolean trackStatistics = true;
 
+    // Observer list - thread safe so simulation thread can notify safely
+    private final java.util.concurrent.CopyOnWriteArrayList<DirectionControlListener> listeners
+        = new java.util.concurrent.CopyOnWriteArrayList<>();
+
     // Getters for correction mechanism display
     public String getName() { return name; }
     public double getInertia() { return inertia; }
@@ -43,12 +47,19 @@ public class DirectionControl {
     protected void setDampening(double dampening) { this.dampening = dampening; }
     protected void setTolerance(double tolerance) { this.tolerance = tolerance; }
 
+    public void addListener(DirectionControlListener listener) {
+        listeners.add(listener);
+    }
+
+    public void removeListener(DirectionControlListener listener) {
+        listeners.remove(listener);
+    }
+
     public DirectionControl(String name, double min, double max, ConfigLoader config) {
         this.name = name;
         this.min = min;
         this.max = max;
 
-        // Read configuration values with defaults if not specified
         this.inertia = config.getDouble(name.toLowerCase() + ".inertia", 1.0);
         this.dampening = config.getDouble(name.toLowerCase() + ".dampening", 0.95);
         this.tolerance = config.getDouble(name.toLowerCase() + ".tolerance", 2.0);
@@ -86,6 +97,11 @@ public class DirectionControl {
         if (velocity < -maxStep) velocity = -maxStep;
 
         currentValue += velocity;
+
+        // Notify all listeners that value has changed
+        for (DirectionControlListener listener : listeners) {
+            listener.onDirectionChanged(this);
+        }
 
         if (currentValue < min) {
             currentValue = min;
